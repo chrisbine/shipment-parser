@@ -3,14 +3,15 @@ import pandas as pd
 from datetime import datetime, timedelta
 import sqlite3
 import logging
+from io import StringIO
 import os
 from typing import Optional
+
 
 # Main file to download, parse, validate and insert data into DB
 
 # Config
 DATABASE_FILE = "energy_data.db"    # sqlite database file
-DOWNLOAD_DIR = "F:\\data"           # download directory
 
 # Logging config
 logging.basicConfig(
@@ -24,7 +25,6 @@ logger = logging.getLogger(__name__)
 TABLE_NAME = "operational_capacity"
 CREATE_TABLE_SQL = f"""
 CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
     post_date DATE,
     effective_date DATE,
     loc TEXT,
@@ -41,8 +41,7 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     auth_overrun_ind TEXT,
     nom_cap_exceed_ind TEXT,
     all_qty_avail TEXT,
-    qty_reason TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    qty_reason TEXT
 );
 """
 
@@ -60,7 +59,7 @@ def setup_database() -> None:
         raise
 
 
-def download_data_by_date(date: datetime) -> Optional[str]:
+def download_data_by_date(date: datetime) -> pd.DataFrame:
     """Download data for a specific date and saving it to file"""
 
     url = "https://twtransfer.energytransfer.com/ipost/TW/capacity/operationally-available"
@@ -74,18 +73,23 @@ def download_data_by_date(date: datetime) -> Optional[str]:
     
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status()
+        response.raise_for_status() # Check Http errors
+
+        data = StringIO(response.text)
+        df = pd.read_csv(
+            data, 
+            encoding='utf-8',
+            on_bad_lines='skip',
+            na_values=['NA', 'N/A', 'missing']
+            )
         
-        # Save to file
-        filename = os.path.join(DOWNLOAD_DIR, f"operational_capacity_{date.strftime('%Y%m%d')}.csv")
-        with open(filename, 'wb') as f:
-            f.write(response.content)
-        
-        logger.info(f"Successfully downloaded data for {date.strftime('%Y-%m-%d')}")
-        return filename
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error downloading data for {date.strftime('%Y-%m-%d')}: {e}")
-        return None
+        df.head()
+    except Exception as e:
+        logger.error(f"Error downloading data into dataframe: {e}")
+        raise
+
+    return df
+
 
 
 def validate_data(df: pd.DataFrame) -> bool:
@@ -157,18 +161,51 @@ def insert_data_to_db(df: pd.DataFrame) -> None:
     try:
         conn = sqlite3.connect(DATABASE_FILE)
         
-        # Insert data
+        # df into temp_table
         df.to_sql(
-            TABLE_NAME,
+            'temp_table',
             conn,
-            if_exists='append',
-            index=False,
-            chunksize=1000,
-            method=None
+            if_exists='replace',
+            index=False
         )
         
+        # Inserting only new records
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            INSERT OR IGNORE INTO {TABLE_NAME}
+            SELECT
+                post_date ,
+                effective_date ,
+                loc ,
+                loc_zn ,
+                loc_name ,
+                loc_purp_desc ,
+                loc_qti ,
+                flow_ind ,
+                dc ,
+                opc ,
+                tsq ,
+                oac ,
+                it ,
+                auth_overrun_ind ,
+                nom_cap_exceed_ind ,
+                all_qty_avail ,
+                qty_reason 
+            FROM temp_table
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {TABLE_NAME} 
+                WHERE post_date = temp_table.post_date
+                    AND effective_date = temp_table.effective_date
+                    AND loc = temp_table.loc
+            )
+        """)
+        
+        # Cleaning up
+        cursor.execute("DROP TABLE IF EXISTS temp_table")
+        conn.commit()
         conn.close()
-        logger.info(f"Successfully inserted {len(df)} records into database")
+        logger.info(f"Inserted {cursor.rowcount} new records into database")
+
     except Exception as e:
         logger.error(f"Error inserting data into database: {e}")
         if 'conn' in locals():
@@ -180,20 +217,15 @@ def process_last_n_days(n: int) -> None:
     """Main function to process data for the last n days"""
     setup_database()
     
-    for days_ago in range(1, n):  # Last n days
+    for days_ago in range(0, n):  # Last n days
         target_date = datetime.now() - timedelta(days=days_ago)
         logger.info(f"Processing data for {target_date.strftime('%Y-%m-%d')}")
         
-        # Step 1: Download data
-        file_path = download_data_by_date(target_date)
-        if not file_path:
-            continue
+        # Step 1: Download data into dataframe
+        df = download_data_by_date(target_date)
         
         try:
-            # Step 2: Load and validate data
-            df = pd.read_csv(file_path)
-
-            # 2.1 : add effective date and post date
+            # 2 : add effective date and post date
             df['Post Date'] = datetime.now()
             df['Effective Date'] = target_date
             
