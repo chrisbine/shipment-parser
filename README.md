@@ -9,6 +9,11 @@ This Python script downloads, validates, transforms, and stores operational capa
 - Transforms data to match database schema
 - Stores data in a local SQLite database
 - Processes data for the last N days (configurable)
+- TODO: Validate needed columns and remove unused ones
+- TODO: Add data validation to filter bad data / check data types
+- TODO: Add option to overwrite/keep DB values if importing the same file
+- TODO: Optimize performance / test file types
+
 
 ## Requirements
 
