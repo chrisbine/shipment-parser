@@ -1,8 +1,18 @@
 # shipment-parser
-Parsing shipment data
 
-Calling main.py will download the last 3 days of data from https://twtransfer.energytransfer.com/ipost/TW/capacity/operationally-available
+This Python script downloads, validates, transforms, and stores operational capacity data from the Energy Transfer's website into a SQLite database.
 
-It will then parse, validate, and insert the data into the database "energy_data.db"
+## Features
 
-If needed, change the parameter of the call in main.py to set a different number of days back to download
+- Downloads CSV data from Energy Transfer's operational capacity endpoint (https://twtransfer.energytransfer.com/ipost/TW/capacity/operationally-available)
+- Validates data structure and content
+- Transforms data to match database schema
+- Stores data in a local SQLite database
+- Processes data for the last N days (configurable)
+
+## Requirements
+
+- Python 3.7+
+- Required packages:
+  ```bash
+  pip install -r requirements.txt
